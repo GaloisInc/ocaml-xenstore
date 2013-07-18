@@ -21,15 +21,26 @@ let ( ++ ) f g x = f (g x)
 let debug fmt = Logging.debug "xs_server" fmt
 let error fmt = Logging.error "xs_server" fmt
 
-let store =
-	let store = Store.create () in
+let store = ref (Store.create 0)
+
+let set_store domid =
+	store := Store.create domid
+
+let get_store () =
+	!store
+
+let prep_store store =
 	List.iter
 		(fun path ->
-			let p = Store.Path.create path (Store.Path.getdomainpath 0) in
+			let p = Store.Path.create path (Store.Path.getdomainpath (Perms.get_dom0_id ())) in
 			if not (Store.exists store p)
-			then Store.mkdir store 0 (Perms.of_domain 0) p
-		) [ "/local"; "/local/domain"; "/tool"; "/tool/xenstored"; "/tool/xenstored/quota"; "/tool/xenstored/connection"; "/tool/xenstored/log"; "/tool/xenstored/memory" ];
-	store
+			then Store.mkdir store (Perms.get_dom0_id ()) (Perms.of_domain (Perms.get_dom0_id ())) p;
+		) [ "/local"; "/local/domain"; "/tool"; "/tool/xenstored"; "/tool/xenstored/quota"; "/tool/xenstored/connection"; "/tool/xenstored/log"; "/tool/xenstored/memory" ]
+
+let check_and_set_xssm () =
+	match Xssm.get_security () with
+	| None -> Xssm.set_security Dummy.dummy_operations
+	| _ -> ()
 
 module type TRANSPORT = sig
   type 'a t = 'a Lwt.t
@@ -86,7 +97,7 @@ module Server = functor(T: TRANSPORT) -> struct
 					| Ok x -> return x
 					| Exception e -> raise_lwt e in
 				let events = take_watch_events () in
-				let reply = Call.reply store c request in
+				let reply = Call.reply (get_store ()) c request in
 				Lwt_mutex.with_lock m
 					(fun () ->
 						lwt () = flush_watch_events events in	
@@ -100,6 +111,8 @@ module Server = functor(T: TRANSPORT) -> struct
 			T.destroy t
 
 	let serve_forever () =
+		set_store (Perms.get_dom0_id ());
+		prep_store (get_store ());
 		lwt server = T.listen () in
 		T.accept_forever server handle_connection
 end

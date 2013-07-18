@@ -3,7 +3,7 @@
 set -e
 
 # Figure out the current compiler
-CURRENT=$(opam switch -list | grep '*' | cut -f 2 -d " ")
+CURRENT=$(opam switch list | grep ' C ' | cut -d " " -f 1)
 
 echo Switching to system
 opam switch system > /dev/null

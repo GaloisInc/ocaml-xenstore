@@ -1,5 +1,5 @@
 # OASIS_START
-# DO NOT EDIT (digest: 552a6362b00efe3d3b785d823d0efbd6)
+# DO NOT EDIT (digest: 82a121b8288125192d3528775f96b02e)
 Logging
 Logging_interface
 Connection
@@ -16,4 +16,7 @@ Xs_server
 Junk
 Introduce
 Heap_debug_interface
+Xssm
+Xssm_label_interface
+Dummy
 # OASIS_STOP

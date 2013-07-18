@@ -96,10 +96,10 @@ let get_operations t = List.rev t.operations
 let set_read_lowpath t path = t.read_lowpath <- get_lowest path t.read_lowpath
 let set_write_lowpath t path = t.write_lowpath <- get_lowest path t.write_lowpath
 
-let exists t perms path = Store.exists t.store path
+let exists t accesser perms path = Store.exists t.store path
 
 let write t creator perm path value =
-	let path_existed = exists t perm path in
+	let path_existed = exists t creator perm path in
 	Store.write t.store creator perm path value;
 	if path_existed
 	then set_write_lowpath t path
@@ -112,28 +112,28 @@ let mkdir ?(with_watch=true) t creator perm path =
 	if with_watch then
 		add_wop t Xs_protocol.Op.Mkdir path
 
-let setperms t perm path perms =
-	Store.setperms t.store perm path perms;
+let setperms t accesser perm path perms =
+	Store.setperms t.store accesser perm path perms;
 	set_write_lowpath t path;
 	add_wop t Xs_protocol.Op.Setperms path
 
-let rm t perm path =
-	Store.rm t.store perm path;
+let rm t accesser perm path =
+	Store.rm t.store accesser perm path;
 	set_write_lowpath t (Store.Path.get_parent path);
 	add_wop t Xs_protocol.Op.Rm path
 
-let list t perm path =	
-	let r = Store.ls t.store perm path in
+let list t accesser perm path =	
+	let r = Store.ls t.store accesser perm path in
 	set_read_lowpath t path;
 	r
 
-let read t perm path =
-	let r = Store.read t.store perm path in
+let read t accesser perm path =
+	let r = Store.read t.store accesser perm path in
 	set_read_lowpath t path;
 	r
 
-let getperms t perm path =
-	let r = Store.getperms t.store perm path in
+let getperms t accesser perm path =
+	let r = Store.getperms t.store accesser perm path in
 	set_read_lowpath t path;
 	r
 

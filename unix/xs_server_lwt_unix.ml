@@ -98,7 +98,8 @@ let namespace_of (fd, _) =
 	let module Interface = struct
 		include Xenstore_server.Namespace.Unsupported
 
-	let read t (perms: Xenstore_server.Perms.t) (path: Xenstore_server.Store.Path.t) =
+	let read t domid (perms: Xenstore_server.Perms.t) (path: Xenstore_server.Store.Path.t) =
+		(* XXX XSSM check *)
 		Xenstore_server.Perms.has perms Xenstore_server.Perms.CONFIGURE;
 		match Xenstore_server.Store.Path.to_string_list path with
 		| [] -> ""
@@ -108,9 +109,10 @@ let namespace_of (fd, _) =
 			string_of_bool (Lwt_unix.writable fd)
 		| _ -> Xenstore_server.Store.Path.doesnt_exist path
 
-	let exists t perms path = try ignore(read t perms path); true with Xenstore_server.Store.Path.Doesnt_exist _ -> false
+	let exists t domid perms path = try ignore(read t domid perms path); true with Xenstore_server.Store.Path.Doesnt_exist _ -> false
 
-	let list t perms path =
+	let list t domid perms path =
+		(* XXX XSSM check *)
 		Xenstore_server.Perms.has perms Xenstore_server.Perms.CONFIGURE;
 		match Xenstore_server.Store.Path.to_string_list path with
 		| [] -> [ "readable"; "writable" ]

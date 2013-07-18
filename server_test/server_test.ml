@@ -18,7 +18,7 @@ let ( |> ) a b = b a
 let ( ++ ) a b x = a (b x)
 let id x = x
 
-let empty_store () = Store.create ()
+let empty_store () = Store.create 0
 
 let none = Transaction.none
 

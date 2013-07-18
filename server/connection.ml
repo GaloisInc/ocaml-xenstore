@@ -165,7 +165,7 @@ let del_watch con name token =
                 Trie.set !watches key ws)
 
 
-let fire_one name watch =
+let fire_one store name watch =
 	let name = match name with
 		| None ->
 			(* If no specific path was modified then we fire the generic watch *)
@@ -176,31 +176,44 @@ let fire_one name watch =
 			if Store.Name.is_relative watch.name
 			then Store.Path.make_relative watch.con.domainpath name
 			else name in
-	let name = Store.Name.to_string name in
-	let open Xs_protocol in
-	Logging.response ~tid:0l ~con:watch.con.domstr (Response.Watchevent(name, watch.token));
-	watch.count <- watch.count + 1;
-	if Queue.length watch.con.watch_events >= (Quota.maxwatchevent_of_domain watch.con.domid) then begin
-		error "domid %d reached watch event quota (%d >= %d): dropping watch %s:%s" watch.con.domid (Queue.length watch.con.watch_events) (Quota.maxwatchevent_of_domain watch.con.domid) name watch.token;
-		watch.con.nb_dropped_watches <- watch.con.nb_dropped_watches + 1
-	end else begin
-		Queue.add (name, watch.token) watch.con.watch_events;
-		Lwt_condition.signal watch.con.cvar ()
-	end
+	try (
+		if not ((name = Store.Name.introduceDomain) || (name = Store.Name.releaseDomain))
+		then (
+			let node_name =
+				if Store.Name.is_relative name
+				then Store.Name.to_string (Store.Name.make_absolute name (Store.Path.to_string watch.con.domainpath))
+				else Store.Name.to_string name
+			in
+			let node_path = Store.Path.of_string node_name in
+			let node_label = Store.get_label store node_path in
+			Xssm.xssm_read watch.con.domid node_name node_label
+		);
+		let name = Store.Name.to_string name in
+		let open Xs_protocol in
+		Logging.response ~tid:0l ~con:watch.con.domstr (Response.Watchevent(name, watch.token));
+		watch.count <- watch.count + 1;
+		if Queue.length watch.con.watch_events >= (Quota.maxwatchevent_of_domain watch.con.domid) then begin
+			error "domid %d reached watch event quota (%d >= %d): dropping watch %s:%s" watch.con.domid (Queue.length watch.con.watch_events) (Quota.maxwatchevent_of_domain watch.con.domid) name watch.token;
+			watch.con.nb_dropped_watches <- watch.con.nb_dropped_watches + 1
+		end else begin
+			Queue.add (name, watch.token) watch.con.watch_events;
+			Lwt_condition.signal watch.con.cvar ()
+		end
+	) with e -> raise e
 
-let fire (op, name) =
+let fire store (op, name) =
 	let key = Store.Name.to_key name in
 	Trie.iter_path
 		(fun _ w -> match w with
 		| None -> ()
-		| Some ws -> List.iter (fire_one (Some name)) ws
+		| Some ws -> List.iter (fire_one store (Some name)) ws
 		) !watches key;
 	
 	if op = Xs_protocol.Op.Rm
 	then Trie.iter
 		(fun _ w -> match w with
 		| None -> ()
-		| Some ws -> List.iter (fire_one None) ws
+		| Some ws -> List.iter (fire_one store None) ws
 		) (Trie.sub !watches key)
 
 let find_next_tid con =
@@ -285,11 +298,11 @@ module Interface = struct
 			| None -> Store.Path.doesnt_exist path
 			| Some i ->
 				let module I = (val i: Namespace.IO) in
-				I.read t perms (Store.Path.of_string_list rest)
+				I.read t c.domid perms (Store.Path.of_string_list rest)
 			end
 		| _ -> Store.Path.doesnt_exist path
 
-	let read t (perms: Perms.t) (path: Store.Path.t) =
+	let read t accesser (perms: Perms.t) (path: Store.Path.t) =
 		Perms.has perms Perms.CONFIGURE;
 		match Store.Path.to_string_list path with
 		| [] -> ""
@@ -307,7 +320,7 @@ module Interface = struct
 			read_connection t perms path c rest
 		| _ -> Store.Path.doesnt_exist path
 
-	let exists t perms path = try ignore(read t perms path); true with Store.Path.Doesnt_exist _ -> false
+	let exists t accesser perms path = try ignore(read t accesser perms path); true with Store.Path.Doesnt_exist _ -> false
 
 	let write_connection t creator perms path c v = function
 		| "backend" :: rest ->
@@ -348,11 +361,11 @@ module Interface = struct
 			| None -> []
 			| Some i ->
 				let module I = (val i: Namespace.IO) in
-				I.list t perms (Store.Path.of_string_list rest)
+				I.list t c.domid perms (Store.Path.of_string_list rest)
 			end
 		| _ -> []
 
-	let list t perms path =
+	let list t _ perms path =
 		Perms.has perms Perms.CONFIGURE;
 		match Store.Path.to_string_list path with
 		| [] -> [ "socket"; "domain" ]

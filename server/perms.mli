@@ -44,10 +44,22 @@ type permission =
 exception Permission_denied
 (** Thrown by the [check] function if role does not have a specific permission *)
 
-val check: t -> permission -> Xs_protocol.ACL.t -> unit
+val check: int -> string -> string -> t -> permission -> Xs_protocol.ACL.t -> unit
 (** [check role permission acl] throws [Permission_denied] if [role] does not
     have [permission] according to the access control list [acl] *)
 
 val has: t -> permission -> unit
 (** [has role permission] throws [Permission_denied] if [role] does not
     have [permission] *)
+
+val get_dom0_id : unit -> int
+(** Get the current value of the priviled (dom0) domain. *)
+
+val set_dom0_id : int -> unit
+(** Set the ID for dom0. This defaults to 0, but can be changed with the
+    --master-domid command-line parameter. *)
+
+val set_dom0_check_enabled : bool -> unit
+(** Set whether checks for dom0 are enabled for privileged operations
+    such as XS_INTRODUCE.  If this check is disabled, we rely solely on
+    XSSM to provide access control for these operations. *)

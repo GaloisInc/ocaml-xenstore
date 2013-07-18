@@ -14,6 +14,8 @@
 let debug fmt = Logging.debug "store" fmt
 let error fmt = Logging.debug "error" fmt
 
+let dummy_label = "system_u:object_r:xs_root_t"
+
 open Junk
 
 exception Already_exists of string
@@ -26,10 +28,13 @@ type t = {
 	perms: Xs_protocol.ACL.t;
 	value: string;
 	children: t list;
+	path: string;
+	label: Xssm.context;
 }
 
-let create _name _creator _perms _value =
-	{ name = Symbol.of_string _name; creator = _creator; perms = _perms; value = _value; children = []; }
+let create _name _creator _perms _value _path _label =
+	{ name = Symbol.of_string _name; creator = _creator; perms = _perms; value = _value; children = []; path = _path; label = _label }
+
 
 let get_creator node = node.creator
 
@@ -40,6 +45,12 @@ let set_value node nvalue =
 
 let set_perms node nperms = { node with perms = nperms }
 let get_perms node = node.perms
+
+let set_label node nlabel = 
+	if node.label = nlabel
+	then node
+	else { node with label = nlabel }
+
 
 let add_child node child =
 	{ node with children = child :: node.children }
@@ -256,8 +267,8 @@ let set_node rnode path nnode =
 		apply_modify rnode path set_node
 
 (* read | ls | getperms use this *)
-let rec lookup node path fct =
-	match path with
+let rec lookup node (path: t) fct =
+	match (to_string_list path) with
 	| []      -> raise Not_found
 	| h :: [] -> fct node h
 	| h :: l  -> let cnode = Node.find node h in lookup cnode l fct
@@ -282,74 +293,15 @@ let set_root store root =
 let get_quota store = store.quota
 let set_quota store quota = store.quota <- quota
 
-(* modifying functions *)
-let path_mkdir store creator perm path =
-	let do_mkdir node name =
-		try
-			let ent = Node.find node name in
-			Perms.check perm Perms.WRITE ent.Node.perms;
-			raise (Already_exists (Path.to_string path))
-		with Not_found ->
-			Perms.check perm Perms.WRITE node.Node.perms;
-			Node.add_child node (Node.create name creator node.Node.perms "") in
-	if path = [] then
-		store.root
-	else
-		Path.apply_modify store.root path do_mkdir
-
-let path_write store creator perm path value =
-	let node_created = ref false in
-	let do_write node name =
-		try
-			let ent = Node.find node name in
-			Perms.check perm Perms.WRITE ent.Node.perms;
-			let nent = Node.set_value ent value in
-			Node.replace_child node ent nent
-		with Not_found ->
-			node_created := true;
-			Perms.check perm Perms.WRITE node.Node.perms;
-			Node.add_child node (Node.create name creator node.Node.perms value) in
-	if path = [] then (
-		Perms.check perm Perms.WRITE store.root.Node.perms;
-		Node.set_value store.root value, false
-	) else
-		Path.apply_modify store.root path do_write, !node_created
-
-let path_rm store perm path =
-	let do_rm node name =
-		try
-			let ent = Node.find node name in
-			Perms.check perm Perms.WRITE ent.Node.perms;
-			Node.del_childname node name
-		with Not_found -> Path.doesnt_exist path in
-	if path = [] then
-		Node.del_all_children store.root
-	else
-		Path.apply_modify store.root path do_rm
-
-let path_setperms store perm path perms =
-	if path = [] then
-		Node.set_perms store.root perms
-	else
-		let do_setperms node name =
-			let c = Node.find node name in
-			Perms.check perm Perms.CHANGE_ACL c.Node.perms;
-			Perms.check perm Perms.WRITE c.Node.perms;
-			let nc = Node.set_perms c perms in
-			Node.replace_child node c nc
-		in
-		Path.apply_modify store.root path do_setperms
-
-(* accessing functions *)
 let lookup node path =
 	let rec lookup_get node path =
 		match path with
 		| []      -> raise Not_found
 		| h :: [] ->
 			(try
-				 Node.find node h
+			 Node.find node h
 			 with Not_found -> Path.doesnt_exist path)
-		| h :: l  -> let cnode = Node.find node h in lookup_get cnode l in
+			 | h :: l  -> let cnode = Node.find node h in lookup_get cnode l in
 
 	if path = [] then
 		Some node
@@ -357,27 +309,217 @@ let lookup node path =
 		try Some (lookup_get node path) with Path.Doesnt_exist _ -> None
 	)
 
-let read store perm path =
+let get_node store path =
+	let root = store.root in
+	let ent = lookup root path in
+	match ent with
+	| Some node -> node
+	| _ -> raise Not_found
+
+let rec get_label store path =
+	try
+		let node = get_node store path in
+		node.Node.label
+	with _ ->
+		get_label store (Path.get_parent path)
+
+let get_node_path store node name =
+	if node = store.root then
+		Path.to_string [ name; ]
+	else
+		Path.to_string ((Path.of_string node.Node.path) @ [ name; ])
+
+let getlabel store accesser perm path =
+	try
+		if path = []
+		then begin
+			Perms.check accesser store.root.Node.path store.root.Node.label perm Perms.READ store.root.Node.perms;
+			Xssm.xssm_read accesser store.root.Node.path store.root.Node.label;
+			store.root.Node.label
+		end
+		else
+			let do_getlabel node name =
+				let c = Node.find node name in
+				Perms.check accesser c.Node.path c.Node.label perm Perms.READ c.Node.perms;
+				Xssm.xssm_read accesser node.Node.path node.Node.label;
+				c.Node.label
+			in
+			Path.apply store.root path do_getlabel
+	with
+	| Not_found -> Path.doesnt_exist path
+
+(* modifying functions *)
+let path_mkdir store creator perm path =
+	let do_mkdir node name =
+		try
+			let ent = Node.find node name in
+			Perms.check creator ent.Node.path ent.Node.label perm Perms.WRITE ent.Node.perms;
+			Xssm.xssm_write creator ent.Node.path ent.Node.label;
+			raise (Already_exists (Path.to_string path))
+		with Not_found ->
+			Perms.check creator node.Node.path node.Node.label perm Perms.WRITE node.Node.perms;
+			Xssm.xssm_write creator node.Node.path node.Node.label;
+			let cnode_path = get_node_path store node name in
+			let cnode_label = Xssm.xssm_new_node_label cnode_path node.Node.label in
+			Xssm.xssm_create creator cnode_path cnode_label;
+			Xssm.xssm_bind creator node.Node.path node.Node.label cnode_path cnode_label;
+			let parent = node.Node.perms.Xs_protocol.ACL.owner in
+			if Xssm.xssm_retain_owner creator parent
+			then begin
+				let perms = { Xs_protocol.ACL.owner = parent; other = node.Node.perms.Xs_protocol.ACL.other; acl = node.Node.perms.Xs_protocol.ACL.acl; } in
+				Node.add_child node (Node.create name creator perms "" cnode_path cnode_label)
+			end
+			else
+				Node.add_child node (Node.create name creator node.Node.perms "" cnode_path cnode_label)
+	in
+	if path = []
+	then begin
+		Perms.check creator store.root.Node.path store.root.Node.label perm Perms.WRITE store.root.Node.perms;
+		Xssm.xssm_write creator store.root.Node.path store.root.Node.label;
+		store.root
+	end
+	else
+		Path.apply_modify store.root path do_mkdir
+
+let check_value store path value =
+	try
+		match Xssm.xssm_get_value_type path with
+		| Xssm.DOMID -> if not (Xssm.xssm_check_domid (int_of_string value)) then raise Not_found
+		| Xssm.PATH -> ignore (get_node store (Path.of_string value))
+		| Xssm.NONE -> ()
+	with Not_found -> raise (Invalid_argument value)
+
+let path_write store creator perm path value =
+	let node_created = ref false in
+	let do_write node name =
+		try
+			let ent = Node.find node name in
+			Perms.check creator ent.Node.path ent.Node.label perm Perms.WRITE ent.Node.perms;
+			Xssm.xssm_write creator ent.Node.path node.Node.label;
+			check_value store ent.Node.path value;
+			let nent = Node.set_value ent value in
+			Node.replace_child node ent nent
+		with Not_found ->
+			node_created := true;
+			Perms.check creator node.Node.path node.Node.label perm Perms.WRITE node.Node.perms;
+			Xssm.xssm_write creator node.Node.path node.Node.label;
+			let cnode_path = get_node_path store node name in
+			let cnode_label = Xssm.xssm_new_node_label cnode_path node.Node.label in
+			Xssm.xssm_create creator cnode_path cnode_label;
+			Xssm.xssm_bind creator node.Node.path node.Node.label cnode_path cnode_label;
+			Xssm.xssm_write creator cnode_path cnode_label;
+			check_value store cnode_path value;
+			let parent = node.Node.perms.Xs_protocol.ACL.owner in
+			if Xssm.xssm_retain_owner creator parent
+			then begin
+				let perms = { Xs_protocol.ACL.owner = parent; other = node.Node.perms.Xs_protocol.ACL.other; acl = node.Node.perms.Xs_protocol.ACL.acl; } in
+				Node.add_child node (Node.create name creator perms value cnode_path cnode_label)
+			end
+			else
+				Node.add_child node (Node.create name creator node.Node.perms value cnode_path cnode_label)
+	in
+	if path = [] then (
+		Perms.check creator store.root.Node.path store.root.Node.label perm Perms.WRITE store.root.Node.perms;
+		Xssm.xssm_write creator store.root.Node.path store.root.Node.label;
+		Node.set_value store.root value, false
+	) else
+		Path.apply_modify store.root path do_write, !node_created
+
+let path_rm store accesser perm path =
+	let do_rm node name =
+		try
+			let ent = Node.find node name in
+			Perms.check accesser ent.Node.path ent.Node.label perm Perms.WRITE ent.Node.perms;
+			Xssm.xssm_delete accesser ent.Node.path ent.Node.label;
+			Node.del_childname node name
+		with Not_found -> Path.doesnt_exist path in
+	if path = [] then
+		Node.del_all_children store.root
+	else
+		Path.apply_modify store.root path do_rm
+
+let path_setperms store accesser perm path perms =
+	if path = []
+	then begin
+		Perms.check accesser store.root.Node.path store.root.Node.label perm Perms.CHANGE_ACL store.root.Node.perms;
+		Perms.check accesser store.root.Node.path store.root.Node.label perm Perms.WRITE store.root.Node.perms;
+		let dac_perms = Xs_protocol.ACL.to_string store.root.Node.perms in 
+		Xssm.xssm_chmod accesser store.root.Node.path store.root.Node.label dac_perms;
+		Node.set_perms store.root perms
+	end
+	else
+		let do_setperms node name =
+			let c = Node.find node name in
+			Perms.check accesser node.Node.path node.Node.label perm Perms.CHANGE_ACL c.Node.perms;
+			Perms.check accesser node.Node.path node.Node.label perm Perms.WRITE c.Node.perms;
+			let dac_perms = Xs_protocol.ACL.to_string c.Node.perms in 
+			Xssm.xssm_chmod accesser c.Node.path c.Node.label dac_perms;
+			let old_owner = c.Node.perms.Xs_protocol.ACL.owner in
+			let new_owner = perms.Xs_protocol.ACL.owner in
+			if new_owner <> old_owner
+			then begin
+				Xssm.xssm_chown_from accesser old_owner;
+				Xssm.xssm_chown_to accesser new_owner;
+				Xssm.xssm_chown_transition old_owner new_owner;
+			end;
+			let nc = Node.set_perms c perms in
+			Node.replace_child node c nc
+		in
+		Path.apply_modify store.root path do_setperms
+
+let path_setlabel store creator perm path label =
+	if path = []
+	then begin
+		(* Perms.check perm Perms.CHANGE_ACL store.root.Node.perms; *)
+		Perms.check creator store.root.Node.path store.root.Node.label perm Perms.WRITE store.root.Node.perms;
+		let old_label = getlabel store creator perm (Path.of_string store.root.Node.path) in
+		Xssm.xssm_relabelfrom creator store.root.Node.path old_label;
+		Xssm.xssm_relabelto creator store.root.Node.path label;
+		Xssm.xssm_transition creator store.root.Node.path old_label label;
+		Node.set_label store.root label
+	end
+	else
+		let do_setlabel node name =
+			let c = Node.find node name in
+			(* Perms.check perm Perms.CHANGE_ACL c.Node.perms; *)
+			Perms.check creator c.Node.path c.Node.label perm Perms.WRITE c.Node.perms;
+			let old_label = getlabel store creator perm (Path.of_string c.Node.path) in
+			Xssm.xssm_relabelfrom creator c.Node.path old_label;
+			Xssm.xssm_relabelto creator c.Node.path label;
+			Xssm.xssm_transition creator c.Node.path old_label label;
+			let nc = Node.set_label c label in
+			Node.replace_child node c nc
+		in
+		Path.apply_modify store.root path do_setlabel
+
+(* accessing functions *)
+let read store accesser perm (path: Path.t) =
 	try
 		let do_read node name =
 			let ent = Node.find node name in
-			Perms.check perm Perms.READ ent.Node.perms;
+			Perms.check accesser ent.Node.path ent.Node.label perm Perms.READ ent.Node.perms;
+			Xssm.xssm_read accesser ent.Node.path ent.Node.label;
 			ent.Node.value
 		in
 		if path = [] then (
 			let ent = store.root in
-			Perms.check perm Perms.READ ent.Node.perms;
+			Perms.check accesser ent.Node.path ent.Node.label perm Perms.READ ent.Node.perms;
+			Xssm.xssm_read accesser ent.Node.path ent.Node.label;
 			ent.Node.value
 		) else
 			Path.apply store.root path do_read
 	with
 		| Not_found -> Path.doesnt_exist path
 
-let ls store perm path =
+let ls store accesser perm path =
 	try
 		let children =
-			if path = [] then
+			if path = []
+			then begin
+				Perms.check accesser store.root.Node.path store.root.Node.label perm Perms.READ store.root.Node.perms;
+				Xssm.xssm_read accesser store.root.Node.path store.root.Node.label;
 				store.root.Node.children
+			end
 			else
 				let do_ls node name =
 					let cnode =
@@ -385,21 +527,27 @@ let ls store perm path =
 						with Not_found ->
 							Path.doesnt_exist path
 					in
-					Perms.check perm Perms.READ cnode.Node.perms;
+					Perms.check accesser cnode.Node.path cnode.Node.label perm Perms.READ cnode.Node.perms;
+					Xssm.xssm_read accesser cnode.Node.path cnode.Node.label;
 					cnode.Node.children in
 				Path.apply store.root path do_ls in
 		List.rev (List.map (fun n -> Symbol.to_string n.Node.name) children)
 	with
 		| Not_found -> Path.doesnt_exist path
 
-let getperms store perm path =
+let getperms store accesser perm path =
 	try
-		if path = [] then
+		if path = []
+		then begin
+			Perms.check accesser store.root.Node.path store.root.Node.label perm Perms.READ store.root.Node.perms;
+			Xssm.xssm_read accesser store.root.Node.path store.root.Node.label;
 			store.root.Node.perms
+		end
 		else
 			let fct n name =
 				let c = Node.find n name in
-				Perms.check perm Perms.READ c.Node.perms;
+				Perms.check accesser c.Node.path c.Node.label perm Perms.READ c.Node.perms;
+				Xssm.xssm_read accesser c.Node.path c.Node.label;
 				c.Node.perms in
 			Path.apply store.root path fct
 	with
@@ -470,7 +618,7 @@ let mkdir store creator perm path =
 		store.root <- root
 	with Already_exists _ -> ()
 
-let rm store perm path =
+let rm store accesser perm path =
 	(* If the parent node doesn't exist then fail *)
 	let parent = Path.get_parent path in
 	if not(exists store parent) then Path.doesnt_exist parent;
@@ -481,24 +629,24 @@ let rm store perm path =
 			| Some node when node = store.root ->
 				invalid_arg "removing the root node is forbidden"
 			| Some rmed_node ->
-				store.root <- path_rm store perm path;
+				store.root <- path_rm store accesser perm path;
 				Node.recurse (fun node -> Quota.decr store.quota (Node.get_creator node)) rmed_node
 	with
 		| Not_found -> Path.doesnt_exist path		
 
-let setperms store perm path nperms =
+let setperms store accesser perm path nperms =
 	try
 		match lookup store.root path with
 			| None -> Path.doesnt_exist path
 			| Some node ->
-				store.root <- path_setperms store perm path nperms
+				store.root <- path_setperms store accesser perm path nperms
 	with
 		| Not_found -> Path.doesnt_exist path
 
-let create () = {
+let create domid = {
 	stat_transaction_coalesce = 0;
 	stat_transaction_abort = 0;
-	root = Node.create "" 0 (Xs_protocol.ACL.({ owner = 0; other = NONE; acl = [] })) "";
+	root = Node.create "" domid (Xs_protocol.ACL.({ owner = domid; other = NONE; acl = [] })) "" "/" dummy_label;
 	quota = Quota.create ();
 }
 let copy store = {
@@ -522,3 +670,11 @@ let stats store =
 		incr nb_nodes
 	);
 	!nb_nodes, store.stat_transaction_abort, store.stat_transaction_coalesce
+
+let setlabel store creator perm path label =
+	try
+		match lookup store.root path with
+		| None -> Path.doesnt_exist path
+		| Some node -> store.root <- path_setlabel store creator perm path label
+	with
+	| Not_found -> Path.doesnt_exist path

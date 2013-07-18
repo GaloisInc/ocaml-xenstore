@@ -37,6 +37,8 @@ let get_namespace_implementation path = match Store.Path.to_string_list path wit
 		Store.Path.of_string_list rest, (module Logging_interface: Namespace.IO)
 	| "tool" :: "xenstored" :: "memory" :: rest ->
 		Store.Path.of_string_list rest, (module Heap_debug_interface: Namespace.IO)
+	| "label" :: rest ->
+		Store.Path.of_string_list rest, (module Xssm_label_interface: Namespace.IO)
 	| _ ->
 		path, (module Transaction: Namespace.IO)
 
@@ -72,12 +74,12 @@ let op_exn store c t (payload: Request.payload) : Response.payload =
 
 			let mkdir_p t creator perm path =
 				let dirname = Store.Path.get_parent path in
-				if not (Impl.exists t perm dirname) then (
+				if not (Impl.exists t creator perm dirname) then (
 					let rec check_path p =
 						match p with
 						| []      -> []
 						| h :: l  ->
-							if Impl.exists t perm h then
+							if Impl.exists t creator perm h then
 								check_path l
 							else
 								p in
@@ -86,13 +88,13 @@ let op_exn store c t (payload: Request.payload) : Response.payload =
 				) in
 			begin match op with
 			| Read ->
-				let v = Impl.read t c.Connection.perm path in
+				let v = Impl.read t c.Connection.domid c.Connection.perm path in
 				Response.Read v
 			| Directory ->
-				let entries = Impl.list t c.Connection.perm path in
+				let entries = Impl.list t c.Connection.domid c.Connection.perm path in
 				Response.Directory entries
 			| Getperms ->
-				let v = Impl.getperms t c.Connection.perm path in
+				let v = Impl.getperms t c.Connection.domid c.Connection.perm path in
 				Response.Getperms v
 			| Write value ->
 				mkdir_p t c.Connection.domid c.Connection.perm path;
@@ -103,10 +105,10 @@ let op_exn store c t (payload: Request.payload) : Response.payload =
 				Impl.mkdir t c.Connection.domid c.Connection.perm path;
 				Response.Mkdir
 			| Rm ->
-				Impl.rm t c.Connection.perm path;
+				Impl.rm t c.Connection.domid c.Connection.perm path;
 				Response.Rm
 			| Setperms perms ->
-				Impl.setperms t c.Connection.perm path perms;
+				Impl.setperms t c.Connection.domid c.Connection.perm path perms;
 				Response.Setperms
 			end
 
@@ -164,7 +166,7 @@ let reply_exn store c (request: t) : Response.payload =
 					&& not(Transaction.commit ~con:c.Connection.domstr t)
 					&& not(transaction_replay store c t)
 				then raise Transaction_again;
-				Transaction.get_paths t |> List.rev |> List.iter Connection.fire;
+				Transaction.get_paths t |> List.rev |> List.iter (Connection.fire store);
 				Response.Transaction_end
 			end else begin
 				(* Don't log an explicit abort *)
@@ -172,7 +174,7 @@ let reply_exn store c (request: t) : Response.payload =
 			end
 		| Request.Watch(path, token) ->
 			let watch = Connection.add_watch c (Store.Name.of_string path) token in
-			Connection.fire_one None watch;
+			Connection.fire_one store None watch;
 			Response.Watch
 		| Request.Unwatch(path, token) ->
 			Connection.del_watch c (Store.Name.of_string path) token;
@@ -188,20 +190,26 @@ let reply_exn store c (request: t) : Response.payload =
 				with _ -> [])
 		| Request.Introduce(domid, mfn, remote_port) ->
 			Perms.has c.Connection.perm Perms.INTRODUCE;
+			Xssm.xssm_introduce c.Connection.domid domid;
 			Introduce.(introduce { domid = domid; mfn = mfn; remote_port = remote_port });
-			Connection.fire (Xs_protocol.Op.Write, Store.Name.introduceDomain);
+			Connection.fire store (Xs_protocol.Op.Write, Store.Name.introduceDomain);
 			Response.Introduce
 		| Request.Resume(domid) ->
 			Perms.has c.Connection.perm Perms.RESUME;
+			Xssm.xssm_resume c.Connection.domid domid;
 			(* register domain *)
 			Response.Resume
 		| Request.Release(domid) ->
 			Perms.has c.Connection.perm Perms.RELEASE;
+			Xssm.xssm_release c.Connection.domid domid;
 			(* unregister domain *)
-			Connection.fire (Xs_protocol.Op.Write, Store.Name.releaseDomain);
+			Connection.fire store (Xs_protocol.Op.Write, Store.Name.releaseDomain);
 			Response.Release
 		| Request.Set_target(mine, yours) ->
 			Perms.has c.Connection.perm Perms.SET_TARGET;
+			Xssm.xssm_make_priv_for c.Connection.domid mine;
+			Xssm.xssm_set_as_target c.Connection.domid yours;
+			Xssm.xssm_set_target mine yours;
 			Hashtbl.iter
 				(fun address c ->
 					if Xs_protocol.domain_of_address address = mine
@@ -214,6 +222,7 @@ let reply_exn store c (request: t) : Response.payload =
 			Response.Restrict
 		| Request.Isintroduced domid ->
 			Perms.has c.Connection.perm Perms.ISINTRODUCED;
+			Xssm.xssm_stat c.Connection.domid domid;
 			Response.Isintroduced false
 		| Request.Error msg ->
 			error "client sent us an error: %s" (hexify msg);
@@ -227,7 +236,7 @@ let reply_exn store c (request: t) : Response.payload =
 			reply in
 
 	if tid = Transaction.none
-	then Transaction.get_paths t |> List.rev |> List.iter Connection.fire;
+	then Transaction.get_paths t |> List.rev |> List.iter (Connection.fire store);
 	response_payload
 
 let gc store =

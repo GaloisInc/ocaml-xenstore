@@ -23,13 +23,21 @@ type domid = int
 (* permission of connections *)
 open Xs_protocol.ACL
 
+let dom0_id = ref 0
+
+let get_dom0_id () =
+	!dom0_id
+
+let set_dom0_id id =
+	dom0_id := id
+
 type elt = domid * (perm list)
 type t =
 	{ main: elt;
 	  target: elt option; }
 
 let superuser : t =
-	{ main = 0, [READ; WRITE];
+	{ main = get_dom0_id (), [READ; WRITE];
 	  target = None }
 
 let of_domain domid : t =
@@ -49,13 +57,21 @@ let is_owner (connection:t) id =
 	| Some target -> fst connection.main = id || fst target = id
 	| None        -> fst connection.main = id
 
+let dom0_check_enabled = ref true
+
+let set_dom0_check_enabled b =
+  dom0_check_enabled := b
+
 let is_dom0 (connection:t) =
-	is_owner connection 0
+  if !dom0_check_enabled then
+    is_owner connection !dom0_id
+  else
+    true
 
 let restrict (connection:t) domid =
 	match connection.target, connection.main with
 	| None, (0, perms) ->
-		info "restricting connection from domid %d to domid %d" 0 domid;
+		info "restricting connection from domid %d to domid %d" !dom0_id domid;
 		{ connection with main = (domid, perms) }
 	| _                -> raise Permission_denied
 
@@ -88,7 +104,7 @@ let check_owner (connection:t) (node:Xs_protocol.ACL.t) =
 	else true
 
 (* check if the current connection has the requested perm on the current node *)
-let check (connection:t) request (node:Xs_protocol.ACL.t) =
+let check dom_id path label (connection:t) request (node:Xs_protocol.ACL.t) =
 	let check_acl domainid =
 		let perm =
 			if List.mem_assoc domainid node.Xs_protocol.ACL.acl
@@ -109,10 +125,10 @@ let check (connection:t) request (node:Xs_protocol.ACL.t) =
 			info "Permission denied: Domain %d has write only access" domainid;
 			false
 	in
-	if true
-	&& not (is_dom0 connection)
-	&& not (check_owner connection node)
-	&& not (List.exists check_acl (get_owners connection))
-	then raise Permission_denied
-
+	let dac_allowed = is_dom0 connection
+	               || check_owner connection node
+	               || List.exists check_acl (get_owners connection) in
+	if not dac_allowed
+		then Xssm.xssm_override dom_id path label
+		else ()
 

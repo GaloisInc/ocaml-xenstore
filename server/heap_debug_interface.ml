@@ -4,7 +4,7 @@ let debug fmt = Logging.debug "memory_interface" fmt
 
 let ( |> ) a b = b a
 
-let read t (perms: Perms.t) (path: Store.Path.t) =
+let read t accesser (perms: Perms.t) (path: Store.Path.t) =
 	Perms.has perms Perms.CONFIGURE;
 	match Store.Path.to_string_list path with
 	| [] -> ""
@@ -14,9 +14,9 @@ let read t (perms: Perms.t) (path: Store.Path.t) =
 	| "symbols"    :: [] -> string_of_int (Symbol.stats ())
 	| _ -> Store.Path.doesnt_exist path
 
-let exists t perms path = try ignore(read t perms path); true with Store.Path.Doesnt_exist _ -> false
+let exists t accesser perms path = try ignore(read t accesser perms path); true with Store.Path.Doesnt_exist _ -> false
 
-let list t perms path =
+let list t _ perms path =
 	Perms.has perms Perms.CONFIGURE;
 	match Store.Path.to_string_list path with
 	| [] -> [ "heap_words"; "live_words"; "free_words"; "symbols" ]

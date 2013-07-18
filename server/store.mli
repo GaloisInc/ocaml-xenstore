@@ -20,7 +20,7 @@ module Node : sig
 
 	type t
 
-	val create : string -> int -> Xs_protocol.ACL.t -> string -> t
+	val create : string -> int -> Xs_protocol.ACL.t -> string -> string -> Xssm.context -> t
 	(** [create name creator perms value] returns fresh Node.t *)
 
 	val get_perms: t -> Xs_protocol.ACL.t
@@ -79,6 +79,9 @@ module Path : sig
 	val to_string: t -> string
 	(** [to_string t] returns [t] as a '/'-separated path string *)
 
+	val of_string: string -> t
+	(** [of_string string] returns [string] as a [path] *)
+
 	val to_string_list: t -> string list
 	(** [to_string_list t] returns [t] as a list of path element strings *)
 
@@ -101,6 +104,8 @@ module Path : sig
 
 end
 
+val dummy_label : Xssm.context
+
 val lookup: Node.t -> Path.t -> Node.t option
 (** [lookup node path] follows [path] from [node] and returns the node it
 	finds, or None *)
@@ -116,7 +121,11 @@ type t =
 val set_root: t -> Node.t -> unit
 val set_quota: t -> Quota.t -> unit
 
-val create: unit -> t
+val get_node: t -> Path.t -> Node.t
+
+val get_label: t -> Path.t -> Xssm.context
+
+val create: int -> t
 
 val copy: t -> t
 
@@ -126,17 +135,21 @@ val write: t -> int -> Perms.t -> Path.t -> string -> unit
 
 val mkdir: t -> int -> Perms.t -> Path.t -> unit
 
-val setperms: t -> Perms.t -> Path.t -> Xs_protocol.ACL.t -> unit
+val setperms: t -> int -> Perms.t -> Path.t -> Xs_protocol.ACL.t -> unit
 
-val rm: t -> Perms.t -> Path.t -> unit
+val rm: t -> int -> Perms.t -> Path.t -> unit
 
-val ls: t -> Perms.t -> Path.t -> string list
+val ls: t -> int -> Perms.t -> Path.t -> string list
 
-val read: t -> Perms.t -> Path.t -> string
+val read: t -> int -> Perms.t -> Path.t -> string
 
-val getperms: t -> Perms.t -> Path.t -> Xs_protocol.ACL.t
+val getperms: t -> int -> Perms.t -> Path.t -> Xs_protocol.ACL.t
 
 
 val set_node: t -> Path.t -> Node.t -> Quota.t -> Quota.t -> unit
 
 val mark_symbols: t -> unit
+
+val setlabel: t -> int -> Perms.t -> Path.t -> Xssm.context -> unit
+
+val getlabel: t -> int -> Perms.t -> Path.t -> Xssm.context

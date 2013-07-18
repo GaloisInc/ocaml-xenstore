@@ -2,7 +2,7 @@ include Namespace.Unsupported
 
 let ( |> ) a b = b a
 
-let read t (perms: Perms.t) (path: Store.Path.t) =
+let read t accesser (perms: Perms.t) (path: Store.Path.t) =
 	Perms.has perms Perms.CONFIGURE;
 	match Store.Path.to_string_list path with
 		| [] -> ""
@@ -49,7 +49,7 @@ let read t (perms: Perms.t) (path: Store.Path.t) =
 			end
 		| _ -> Store.Path.doesnt_exist path
 
-let exists t perms path = try ignore(read t perms path); true with Store.Path.Doesnt_exist _ -> false
+let exists t accesser perms path = try ignore(read t accesser perms path); true with Store.Path.Doesnt_exist _ -> false
 
 let write t creator perms path value =
 	Perms.has perms Perms.CONFIGURE;
@@ -74,7 +74,7 @@ let write t creator perms path value =
 			Quota.set_override Quota.maxwatchevent_overrides (int_of_string domid) (Some (int_of_string value))
 		| _ -> Store.Path.doesnt_exist path
 
-let list t perms path =
+let list t _ perms path =
 	Perms.has perms Perms.CONFIGURE;
 	match Store.Path.to_string_list path with
 	| [] -> [ "default"; "entries-per-domain"; "number-of-entries"; "number-of-registered-watches"; "number-of-active-transactions"; "number-of-queued-watch-events" ]
@@ -93,7 +93,7 @@ let list t perms path =
 	| _ -> []
 
 
-let rm t perms path =
+let rm t _ perms path =
 	Perms.has perms Perms.CONFIGURE;
 	match Store.Path.to_string_list path with
 	| "number-of-entries" :: domid :: [] ->

@@ -13,7 +13,7 @@ let general_params = [
 	"transaction", disable_transaction;
 ]
 
-let read t (perms: Perms.t) (path: Store.Path.t) =
+let read t accesser (perms: Perms.t) (path: Store.Path.t) =
 	Perms.has perms Perms.CONFIGURE;
 	match Store.Path.to_string_list path with
 		| [] -> ""
@@ -29,7 +29,7 @@ let read t (perms: Perms.t) (path: Store.Path.t) =
 			else Store.Path.doesnt_exist path
 		| _ -> Store.Path.doesnt_exist path
 
-let exists t perms path = try ignore(read t perms path); true with Store.Path.Doesnt_exist _ -> false
+let exists t accesser perms path = try ignore(read t accesser perms path); true with Store.Path.Doesnt_exist _ -> false
 
 let write t creator perms path value =
 	Perms.has perms Perms.CONFIGURE;
@@ -49,7 +49,7 @@ let write t creator perms path value =
 			end
 		| _ -> Store.Path.doesnt_exist path
 
-let list t perms path =
+let list t _ perms path =
 	Perms.has perms Perms.CONFIGURE;
 	match Store.Path.to_string_list path with
 		| [] -> [ "request"; "reply-ok"; "reply-err" ] @ (List.map fst (List.filter (fun (_, b) -> !b) general_params))
@@ -58,7 +58,7 @@ let list t perms path =
 		| "reply-err" :: [] -> !disable_reply_err
 		| _ -> []
 
-let rm t perms path =
+let rm t _ perms path =
 	Perms.has perms Perms.CONFIGURE;
 	let f list key = list := List.filter (fun x -> x <> key) !list in
 	match Store.Path.to_string_list path with
